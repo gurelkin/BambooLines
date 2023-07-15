@@ -3,6 +3,7 @@ from sys import argv
 from json import dump
 
 import matplotlib.pyplot as plt
+import numpy as np
 
 from render import *
 from find import *
@@ -29,9 +30,9 @@ def main():
 
 
 def my_main():
-    path = "data/RPf_00309.obj"
+    path = "data/RPf_00311.obj"
     frag = Render(path, pose='backside')
-    find_bamboo_lines_angle(frag)
+    print(find_bamboo_lines_angle(frag))
     # frag.plot()
 
 

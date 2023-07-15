@@ -24,8 +24,9 @@ def detect_ridges(fragment: Render) -> np.array:
     return np.where(mask == 1, hess, 0)
 
 
-def suspect_angles(ridge_map: np.array(list[bool]), plot=False) -> np.array(list[float]):
+def suspect_angles(ridge_map: np.array(list[bool]), plot=False) -> np.array:
     # try to find lines in the ridge map using Hough transform
+    # angles = np.linspace(0, np.pi, 180, endpoint=False)
     hough_space, thetas, rhos = skimage.transform.hough_line(ridge_map)
     peaks = skimage.transform.hough_line_peaks(hough_space, thetas, rhos, threshold=HOUGH_SCORE_THRESHOLD)
     # for visual inspection
@@ -39,37 +40,72 @@ def suspect_angles(ridge_map: np.array(list[bool]), plot=False) -> np.array(list
     return peaks[1]
 
 
-def make_line_masks(angle, shape, num_lines=16, spacing=64):
-    cos_angle, sin_angle = np.cos(angle), np.sin(angle)
+# def line_variance(angle, image, mask):
+#     if angle < 0:
+#         angle = 2 * np.pi + angle
+#     height, width = image.shape
+#     center_point = height // 2, width // 2
+#     length = int(max(center_point) * np.sqrt(2))
+#     p1 = center_point[1] + int(length * np.cos(angle)), center_point[0] + int(length * np.sin(angle))
+#     p2 = center_point[1] - int(length * np.cos(angle)), center_point[0] - int(length * np.sin(angle))
+#     rr, cc = skimage.draw.line(*p1, *p2)
+#     rr, cc = np.clip(rr, 0, height - 1), np.clip(cc, 0, width - 1)
+#     plot = np.zeros((height, width))
+#     plot[rr, cc] = 1
+#     plt.imshow(plot)
+#     plt.show()
+#     values = [image[index] for index in zip(rr, cc) if mask[index] == 1]
+#     return np.var(values)
+#
+#
+# def _line_masks(shape, angle, stride=64):
+#     height, width = shape
+#     center_i = height // 2
+#     line = np.zeros(shape)
+#     for j in range(width):
+#         line[center_i, j] = 1
+#     line = skimage.transform.rotate(line, np.rad2deg(angle))
+#     lines = [line.copy()]
+#     stride_x = stride / np.sin(angle)
+#     stride_y = stride / np.cos(angle)
+#     translation_matrix = skimage.transform.SimilarityTransform(translation=(stride_x, stride_y))
+#     while np.any(line):
+#         line = skimage.transform.warp(line, translation_matrix)
+#         lines.append(line.copy())
+#     translation_matrix = skimage.transform.SimilarityTransform(translation=(-stride_x, -stride_y))
+#     line = lines[0]
+#     while np.any(line):
+#         line = skimage.transform.warp(line, translation_matrix)
+#         lines.append(line.copy())
+#     plot = np.zeros(shape)
+#     for l in lines:
+#         plot = np.where(l > 0, 1, plot)
+#     plt.imshow(plot)
+#     plt.show()
+
+
+def perp(angle):
+    return angle - np.sign(angle) * np.pi / 2
+
+
+def line_masks(shape, angle, stride=64):
+    height, width = shape
     lines = []
-
-    center_x = (shape[1] - 1) / 2
-    center_y = (shape[0] - 1) / 2
-    start_x = center_x - (num_lines // 2) * spacing * np.sin(angle)
-    start_y = center_y + (num_lines // 2) * spacing * np.cos(angle)
-
-    for i in range(num_lines):
-        line_x = np.arange(shape[1]) * cos_angle - (i * spacing) * sin_angle
-        line_y = np.arange(shape[0]) * sin_angle + (i * spacing) * cos_angle
-        line_x_indices = np.round(line_x).astype(int)
-        line_y_indices = np.round(line_y).astype(int)
-
-        if len(line_x_indices) != len(line_y_indices):
-            min_len = min(len(line_x_indices), len(line_y_indices))
-            line_x_indices = line_x_indices[:min_len]
-            line_y_indices = line_y_indices[:min_len]
-
-        valid_indices = np.logical_and.reduce((
-            line_x_indices >= 0,
-            line_x_indices < shape[1],
-            line_y_indices >= 0,
-            line_y_indices < shape[0]
-        ))
-        line_x_indices = line_x_indices[valid_indices]
-        line_y_indices = line_y_indices[valid_indices]
-        lines.append([line_y_indices, line_x_indices])
-
+    for i in range(stride, height, stride):
+        line = np.zeros(shape)
+        line[i] = np.ones(width)
+        lines.append(line)
+    for index, line in enumerate(lines):
+        line = skimage.transform.rotate(line, np.rad2deg(angle))
+        lines[index] = np.where(line > 0, 1, 0)
     return lines
+
+
+def mask_variance(image, mask):
+    values = image[mask == 1]
+    if len(values) == 0:
+        return None
+    return np.var(values)
 
 
 def find_bamboo_lines_angle(fragment: Render):
@@ -77,23 +113,28 @@ def find_bamboo_lines_angle(fragment: Render):
     ridge_map = detect_ridges(fragment)
     # compute the angles of the bamboo lines
     angles = suspect_angles(ridge_map, plot=True)
-    print(angles * (180 / np.pi))
     # if there aren't any angles with sufficient score, we conclude there are no bamboo lines
     if len(angles) == 0:
         return None
-    # if there's only one candidate angle, return that one
-    if len(angles) == 1:
-        return angles[0]
     # choose the "most correct" angle
-    scores = np.zeros_like(angles)
-    depth_map = fragment.get_depth_map(normalize=True)
-    line_masks = [make_line_masks(a, depth_map.shape) for a in angles]
-    lines = np.zeros_like(depth_map)
-    for lm in line_masks:
-        for [rr, cc] in lm:
-            lines[rr, cc] = 1
-    plt.imshow(lines)
-    plt.show()
+    depth_map = fragment.get_depth_map()
+    mask = fragment.get_mask()
+    parallel_lines = [line_masks(depth_map.shape, perp(-a)) for a in angles]
+    perp_lines = [line_masks(depth_map.shape, -a) for a in angles]
+    parallel_vars = [np.mean([mask_variance(depth_map, mask*line)
+                              for line in lines
+                              if np.max(mask*line) > 0])
+                     for lines in parallel_lines]
+    perp_vars = [np.mean([mask_variance(depth_map, mask * line)
+                          for line in lines
+                          if np.max(mask*line) > 0])
+                 for lines in perp_lines]
+    scores = np.subtract(perp_vars, parallel_vars)
+    return perp(-angles[np.argmax(scores)])
+
+    # parallel_variances = [line_variance(a, depth_map, mask) for a in angles]
+    # perpendicular_variances = [line_variance(perp(a), depth_map, mask) for a in angles]
+
     # plt.imshow(hess)
     # plt.show()
     # hough_suspects(hess, plot=True)
