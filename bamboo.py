@@ -15,7 +15,7 @@ def find_bamboo_lines(render: Render, show=False) -> list[tuple[float, float]]:
 
 
 def main():
-    # bamboo <data_path> <out_path> <show>
+    # bamboo.py <data_path> <out_path> <show>
     data_path = argv[1]  # path to the data directory
     out_path = argv[2]   # path to the output directory
     show = len(argv) == 4 and argv[3] == "-s"  # plots the found bamboo lines
@@ -32,8 +32,12 @@ def main():
 def my_main():
     path = "data/RPf_00311.obj"
     frag = Render(path, pose='backside')
-    print(find_bamboo_lines_angle(frag))
-    # frag.plot()
+    frag.plot()
+    angle = find_bamboo_lines_angle(frag)
+    if angle is not None:
+        print(np.rad2deg(angle))
+        frag.planar_rotation(angle)
+        frag.plot()
 
 
 if __name__ == '__main__':

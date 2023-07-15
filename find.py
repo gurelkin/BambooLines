@@ -98,6 +98,11 @@ def line_masks(shape, angle, stride=64):
     for index, line in enumerate(lines):
         line = skimage.transform.rotate(line, np.rad2deg(angle))
         lines[index] = np.where(line > 0, 1, 0)
+    # all_lines_plot = np.zeros(shape)
+    # for line in lines:
+    #     all_lines_plot[line == 1] = 1
+    # plt.imshow(all_lines_plot)
+    # plt.show()
     return lines
 
 
@@ -113,11 +118,12 @@ def find_bamboo_lines_angle(fragment: Render):
     ridge_map = detect_ridges(fragment)
     # compute the angles of the bamboo lines
     angles = suspect_angles(ridge_map, plot=True)
+    print(angles)
     # if there aren't any angles with sufficient score, we conclude there are no bamboo lines
     if len(angles) == 0:
         return None
     # choose the "most correct" angle
-    depth_map = fragment.get_depth_map()
+    depth_map = fragment.get_depth_map(normalize=True, invert=True)
     mask = fragment.get_mask()
     parallel_lines = [line_masks(depth_map.shape, perp(-a)) for a in angles]
     perp_lines = [line_masks(depth_map.shape, -a) for a in angles]
@@ -129,7 +135,10 @@ def find_bamboo_lines_angle(fragment: Render):
                           for line in lines
                           if np.max(mask*line) > 0])
                  for lines in perp_lines]
-    scores = np.subtract(perp_vars, parallel_vars)
+    print(parallel_vars)
+    print(perp_vars)
+    scores = np.abs(np.subtract(perp_vars, parallel_vars))
+    print(scores)
     return perp(-angles[np.argmax(scores)])
 
     # parallel_variances = [line_variance(a, depth_map, mask) for a in angles]

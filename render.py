@@ -77,6 +77,17 @@ class Render(object):
         light_node = pyrender.Node(light=light, matrix=camera_pose)
         self.scene.add_node(light_node)
 
+
+    def planar_rotation(self, angle):
+        tmesh = self.trimesh.copy()
+        rotation_matrix = trimesh.transformations.rotation_matrix(angle, [0, 0, 1])
+        tmesh.apply_transform(rotation_matrix)
+        self.trimesh = tmesh
+        for mesh_node in self.scene.mesh_nodes.copy():
+            self.scene.remove_node(mesh_node)
+        self.scene.add(pyrender.Mesh.from_trimesh(self.trimesh))
+
+
     def get_depth_map(self, normalize=False, invert=False):
         """
         Render a depth map of the fragment in relation to the camera.\n
