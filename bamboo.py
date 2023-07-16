@@ -6,10 +6,6 @@ from consts import *
 from find import *
 
 
-def find_bamboo_lines(render: Render, show=False) -> list[tuple[float, float]]:
-    return [(0, 0)]
-
-
 def main():
     # bamboo.py <data_path> <out_path> <show>
     data_path = argv[1]  # path to the data directory
