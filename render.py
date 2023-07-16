@@ -1,9 +1,9 @@
-import numpy as np
 import pyrender
 import trimesh
 import open3d as o3d
 import skimage
 import matplotlib.pyplot as plt
+
 from consts import *
 
 
@@ -54,6 +54,12 @@ class Render(object):
         self.set_camera_position(pose, camera_type)
 
     def set_camera_position(self, pose='intact', camera_type='perspective'):
+        """
+        Moves the render's camera such that it points at `pose`.
+
+        :param pose: the part of the fragment watched by the camera; set to "intact" or "backside".
+        :param camera_type: type of the camera; set to "perspective" or "orthographic".
+        """
         # remove the previous camera and light nodes
         for camera_node in self.scene.camera_nodes.copy():
             self.scene.remove_node(camera_node)
@@ -77,8 +83,12 @@ class Render(object):
         light_node = pyrender.Node(light=light, matrix=camera_pose)
         self.scene.add_node(light_node)
 
-
     def planar_rotation(self, angle):
+        """
+        Rotates the fragment's mesh in `angle` radians around the z-axis.
+
+        :param angle: input angle.
+        """
         tmesh = self.trimesh.copy()
         rotation_matrix = trimesh.transformations.rotation_matrix(angle, [0, 0, 1])
         tmesh.apply_transform(rotation_matrix)
@@ -87,11 +97,13 @@ class Render(object):
             self.scene.remove_node(mesh_node)
         self.scene.add(pyrender.Mesh.from_trimesh(self.trimesh))
 
-
     def get_depth_map(self, normalize=False, invert=False):
         """
         Render a depth map of the fragment in relation to the camera.\n
-        NOTE! pyrender currently has a bug that computes wrong depth maps for non-perspective cameras (July 2023).\n
+        NOTE! pyrender currently has a bug that computes wrong depth maps for non-perspective cameras (July 2023).
+
+        :param normalize: normalizes the depth map between 0 and 1.
+        :param invert: inverts the depth map such that closer points have higher values.
         :return: the depth map of the fragment in relation to the camera.
         """
         _, depth = pyrender.OffscreenRenderer(viewport_width=VP_WIDTH, viewport_height=VP_HEIGHT).render(self.scene)
@@ -104,12 +116,21 @@ class Render(object):
         return depth
 
     def take_photo(self, grayscale=False):
+        """
+        Returns an image of the fragment, as taken from its camera.
+
+        :param grayscale: turns the fragment's photo into a grayscale image
+        :return: the fragment's image.
+        """
         photo, _ = pyrender.OffscreenRenderer(viewport_width=VP_WIDTH, viewport_height=VP_HEIGHT).render(self.scene)
         if grayscale:
             photo = skimage.color.rgb2gray(photo)
         return photo
 
     def get_mask(self):
+        """
+        Creates a mask of the fragment (ones) and the background (zeros).
+        """
         photo = self.take_photo(grayscale=True)
         return np.where(photo == 0, 0, 1)
 

@@ -1,36 +1,47 @@
-import numpy as np
-import scipy
-import skimage
-from matplotlib import pyplot as plt
-import trimesh
-import open3d as o3d
-from tqdm import tqdm
 from render import *
 from consts import *
 
 
-def detect_ridges(fragment: Render) -> np.array:
-    # filter the ridges in the fragment's depth map
-    depth_map = fragment.get_depth_map(normalize=True, invert=True)
+def detect_ridges(depth_map: np.ndarray, mask: np.ndarray, show=False) -> np.array:
+    """
+    Finds the inner ridges (as in without the contour) of a fragment's (normalized and inverted) `edge_map`.
+
+    :param depth_map: depth map od the fragment's backside.
+    :param mask: a mask to filter ot the background.
+    :param show: if True, plots the output ridge map.
+    :return: an image of the inner ridges of the fragment.
+    """
+    # filter the ridges in the depth map
     hess = 1 - skimage.filters.hessian(depth_map)
     # remove the outermost contour from the ridge map
     contours = skimage.measure.find_contours(hess)
     outermost_contour = max(contours, key=len)
     rr, cc = np.round(outermost_contour[:, 0]), np.round(outermost_contour[:, 1])
-    mask = np.zeros_like(hess)
-    mask[rr.astype(int), cc.astype(int)] = 1
-    mask = skimage.morphology.dilation(mask, skimage.morphology.disk(8))
-    mask = (1 - mask) * fragment.get_mask()
-    return np.where(mask == 1, hess, 0)
+    inner_mask = np.zeros_like(hess)
+    inner_mask[rr.astype(int), cc.astype(int)] = 1
+    inner_mask = skimage.morphology.dilation(inner_mask, skimage.morphology.disk(8))
+    inner_mask = (1 - inner_mask) * mask
+    ridge_map = np.where(inner_mask == 1, hess, 0)
+    # for visual inspection
+    if show:
+        plt.imshow(ridge_map, cmap='gray')
+        plt.show()
+    return ridge_map
 
 
-def suspect_angles(ridge_map: np.array(list[bool]), plot=False) -> np.array:
+def suspect_angles(ridge_map, show=False) -> np.ndarray:
+    """
+    Selects candidate angles for bamboo lines from a `ridge_map`.
+
+    :param ridge_map: output of detect_ridges function.
+    :param show: plots the lines found in the Hough transform.
+    :return: a list of angles that might be the angles of the bamboo lines.
+    """
     # try to find lines in the ridge map using Hough transform
-    # angles = np.linspace(0, np.pi, 180, endpoint=False)
     hough_space, thetas, rhos = skimage.transform.hough_line(ridge_map)
     peaks = skimage.transform.hough_line_peaks(hough_space, thetas, rhos, threshold=HOUGH_SCORE_THRESHOLD)
     # for visual inspection
-    if plot:
+    if show:
         plt.imshow(ridge_map, cmap='gray')
         for score, angle, dist in zip(*peaks):
             (x0, y0) = dist * np.array([np.cos(angle), np.sin(angle)])
@@ -40,24 +51,17 @@ def suspect_angles(ridge_map: np.array(list[bool]), plot=False) -> np.array:
     return peaks[1]
 
 
-# def line_variance(angle, image, mask):
-#     if angle < 0:
-#         angle = 2 * np.pi + angle
-#     height, width = image.shape
-#     center_point = height // 2, width // 2
-#     length = int(max(center_point) * np.sqrt(2))
-#     p1 = center_point[1] + int(length * np.cos(angle)), center_point[0] + int(length * np.sin(angle))
-#     p2 = center_point[1] - int(length * np.cos(angle)), center_point[0] - int(length * np.sin(angle))
-#     rr, cc = skimage.draw.line(*p1, *p2)
-#     rr, cc = np.clip(rr, 0, height - 1), np.clip(cc, 0, width - 1)
-#     plot = np.zeros((height, width))
-#     plot[rr, cc] = 1
-#     plt.imshow(plot)
-#     plt.show()
-#     values = [image[index] for index in zip(rr, cc) if mask[index] == 1]
-#     return np.var(values)
-#
-#
+def perp(angle):
+    """
+    Calculates the perpendicular of an `angel` in the range [-pi/2, pi/2].
+
+    :param angle: input angle.
+    :return: the perpendicular angle, still within range.
+    """
+    return angle - np.sign(angle) * np.pi / 2
+
+
+# ========== older version of line_masks function ==========
 # def _line_masks(shape, angle, stride=64):
 #     height, width = shape
 #     center_i = height // 2
@@ -82,79 +86,85 @@ def suspect_angles(ridge_map: np.array(list[bool]), plot=False) -> np.array:
 #         plot = np.where(l > 0, 1, plot)
 #     plt.imshow(plot)
 #     plt.show()
+# ==========================================================
 
 
-def perp(angle):
-    return angle - np.sign(angle) * np.pi / 2
+def line_masks(shape: tuple[int, int], angle: float, stride=64):
+    """
+    Creates (`shape[0]` // `stride`) masks, each contains one line tilted in the given `angle`. The spacing between the
+    lines is determined by `stride`.
 
-
-def line_masks(shape, angle, stride=64):
+    :param shape: (height, width) of the mask.
+    :param angle: the angle in which to tilt the lines (between -pi/2 and pi/2).
+    :param stride: space between two lines (in pixels).
+    :return: list of line masks.
+    """
     height, width = shape
     lines = []
+    # create horizontal lines
     for i in range(stride, height, stride):
         line = np.zeros(shape)
         line[i] = np.ones(width)
         lines.append(line)
+    # tilt the lines and make sure the mask remains binary
     for index, line in enumerate(lines):
         line = skimage.transform.rotate(line, np.rad2deg(angle))
         lines[index] = np.where(line > 0, 1, 0)
+    # ========== uncomment to plot the calculated lines ==========
     # all_lines_plot = np.zeros(shape)
     # for line in lines:
     #     all_lines_plot[line == 1] = 1
     # plt.imshow(all_lines_plot)
     # plt.show()
+    # ============================================================
     return lines
 
 
-def mask_variance(image, mask):
+def mask_variance(image: np.ndarray, mask: np.ndarray):
+    """
+    Calculates the variance of an `image`'s pixels defined by `mask`.
+
+    :param image: grayscale image from which to calculate the variance.
+    :param mask: binary ndarray in the shape of the image.
+    :return: variance of image[mask == 1] or None if mask is all zeros.
+    """
     values = image[mask == 1]
     if len(values) == 0:
         return None
     return np.var(values)
 
 
-def find_bamboo_lines_angle(fragment: Render):
+def find_bamboo_lines_angle(fragment: Render, show=False):
+    """
+    Detects the angle of the bamboo lines in the given `fragment`, if exist.
+
+    :param fragment: input fragment.
+    :param show: if True, plots the results of some sub-procedures.
+    :return: the bamboo lines angle or None if no bamboo lines were found; that is, the (acute) angle the bamboo lines
+    create with the positive direction of the x-axis.
+    """
     # find the inner ridges (i.e., without the contour) in the fragment's depth map
-    ridge_map = detect_ridges(fragment)
+    depth_map = fragment.get_depth_map(normalize=True, invert=True)
+    mask = fragment.get_mask()
+    ridge_map = detect_ridges(depth_map, mask, show=show)
     # compute the angles of the bamboo lines
-    angles = suspect_angles(ridge_map, plot=True)
-    print(angles)
+    angles = suspect_angles(ridge_map, show=show)
     # if there aren't any angles with sufficient score, we conclude there are no bamboo lines
     if len(angles) == 0:
         return None
-    # choose the "most correct" angle
-    depth_map = fragment.get_depth_map(normalize=True, invert=True)
-    mask = fragment.get_mask()
+    elif len(angles) == 1:
+        return perp(-angles[0])
+    # choose the "most correct" angle; that is, the angle that have the highest difference between its parallel
+    # line masks variance and its perpendicular line masks variance
     parallel_lines = [line_masks(depth_map.shape, perp(-a)) for a in angles]
     perp_lines = [line_masks(depth_map.shape, -a) for a in angles]
     parallel_vars = [np.mean([mask_variance(depth_map, mask*line)
                               for line in lines
                               if np.max(mask*line) > 0])
                      for lines in parallel_lines]
-    perp_vars = [np.mean([mask_variance(depth_map, mask * line)
+    perp_vars = [np.mean([mask_variance(depth_map, mask*line)
                           for line in lines
                           if np.max(mask*line) > 0])
                  for lines in perp_lines]
-    print(parallel_vars)
-    print(perp_vars)
     scores = np.abs(np.subtract(perp_vars, parallel_vars))
-    print(scores)
     return perp(-angles[np.argmax(scores)])
-
-    # parallel_variances = [line_variance(a, depth_map, mask) for a in angles]
-    # perpendicular_variances = [line_variance(perp(a), depth_map, mask) for a in angles]
-
-    # plt.imshow(hess)
-    # plt.show()
-    # hough_suspects(hess, plot=True)
-    # canny = skimage.feature.canny(depth_map)
-    # canny = np.where(mask == 0, 0, canny)
-    # plt.imshow(canny)
-    # plt.show()
-    # hough_suspects(canny, plot=True)
-    # ridge_mask = np.where(depth_map > 0.9, 1, 0)
-    # plt.imshow(ridge_mask)
-    # plt.show()
-    # baz = np.where(mask == 1, hess, 1)
-    # plt.imshow(baz)
-    # plt.show()
